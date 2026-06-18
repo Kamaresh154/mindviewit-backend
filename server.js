@@ -4,7 +4,12 @@ const cors = require('cors');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
-app.use(cors()); // allows your GitHub Pages frontend to call this API
+app.use(cors({
+  origin: '*',  // allows GitHub Pages and local testing
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type']
+}));
+app.options('*', cors()); // handle preflight requests
 
 /* ── Gmail transporter using env variables ── */
 const transporter = nodemailer.createTransport({

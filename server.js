@@ -1,34 +1,54 @@
-const express = require('express');
+const express    = require('express');
 const nodemailer = require('nodemailer');
-const cors = require('cors');
+const cors       = require('cors');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
-app.use(cors({
-  origin: '*',  // allows GitHub Pages and local testing
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type']
-}));
-app.options('*', cors()); // handle preflight requests
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
+app.options('*', cors());
 
-/* ── Gmail transporter using env variables ── */
+/* Strip spaces from app password in case Render adds quotes or spaces */
+const SMTP_PASS = (process.env.SMTP_PASSWORD || '').replace(/\s/g, '');
+const SMTP_USER = (process.env.SMTP_EMAIL    || '').trim();
+const ADMIN     = (process.env.ADMIN_EMAIL   || SMTP_USER).trim();
+
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true,          /* SSL — more reliable than STARTTLS on port 587 */
   auth: {
-    user: process.env.SMTP_EMAIL,
-    pass: process.env.SMTP_PASSWORD  // Gmail App Password (spaces are fine)
+    user: SMTP_USER,
+    pass: SMTP_PASS
   }
 });
 
 /* ── Health check ── */
 app.get('/', (req, res) => {
-  res.json({ status: 'MindView IT email server is running' });
+  res.json({
+    status: 'MindView IT email server is running',
+    smtp_user_set: !!SMTP_USER,
+    smtp_pass_set: !!SMTP_PASS,
+    admin_set:     !!ADMIN
+  });
+});
+
+/* ── Test email route — visit /test-email in browser to verify Gmail works ── */
+app.get('/test-email', async (req, res) => {
+  try {
+    await transporter.sendMail({
+      from: `"MindView IT Test" <${SMTP_USER}>`,
+      to:   ADMIN,
+      subject: 'Test Email from MindView Backend',
+      text:    'If you received this, your email setup is working correctly!'
+    });
+    res.json({ success: true, message: 'Test email sent to ' + ADMIN });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message, code: err.code });
+  }
 });
 
 /* ══════════════════════════════════════════
    POST /send-application
-   Called from careers page after ATS check.
-   Body: { name, email, jobTitle, passed, score, resumeSnippet }
 ══════════════════════════════════════════ */
 app.post('/send-application', async (req, res) => {
   const { name, email, jobTitle, passed, score, resumeSnippet } = req.body;
@@ -37,14 +57,13 @@ app.post('/send-application', async (req, res) => {
     return res.status(400).json({ error: 'Missing required fields: name, email, jobTitle' });
   }
 
-  const statusColor  = passed ? '#155724' : '#721c24';
-  const statusBg     = passed ? '#d4edda'  : '#f8d7da';
-  const statusText   = passed ? 'SHORTLISTED ✓' : 'NOT SELECTED';
-  const resultMsg    = passed
-    ? 'We are pleased to inform you that your resume has been successfully shortlisted after our initial screening. Our HR team will contact you with further details within the next few working days.'
-    : 'After careful review, we regret that your profile does not fully align with the current requirements for this role. We appreciate your interest and encourage you to apply for future openings.';
+  const statusColor = passed ? '#155724' : '#721c24';
+  const statusBg    = passed ? '#d4edda'  : '#f8d7da';
+  const statusText  = passed ? 'SHORTLISTED ✓' : 'NOT SELECTED';
+  const resultMsg   = passed
+    ? 'We are pleased to inform you that your resume has been successfully shortlisted. Our HR team will contact you within the next few working days.'
+    : 'After careful review, your profile does not fully align with the current requirements. We appreciate your interest and encourage you to apply for future openings.';
 
-  /* Email to candidate */
   const candidateHtml = `
     <div style="max-width:600px;margin:auto;font-family:Arial,sans-serif;border:1px solid #e9ecef;border-radius:12px;overflow:hidden;">
       <div style="background:#0a192f;padding:25px;text-align:center;">
@@ -64,7 +83,6 @@ app.post('/send-application', async (req, res) => {
       </div>
     </div>`;
 
-  /* Email to admin */
   const adminHtml = `
     <div style="max-width:600px;margin:auto;font-family:Arial,sans-serif;border:1px solid #e9ecef;border-radius:12px;overflow:hidden;">
       <div style="background:#0a192f;padding:25px;">
@@ -85,33 +103,27 @@ app.post('/send-application', async (req, res) => {
     </div>`;
 
   try {
-    /* Send to candidate */
     await transporter.sendMail({
-      from: `"MindView IT Services" <${process.env.SMTP_EMAIL}>`,
-      to: email,
+      from:    `"MindView IT Services" <${SMTP_USER}>`,
+      to:      email,
       subject: `Application Received – ${jobTitle} | MindView IT Services`,
-      html: candidateHtml
+      html:    candidateHtml
     });
-
-    /* Send to admin */
     await transporter.sendMail({
-      from: `"MindView IT Services" <${process.env.SMTP_EMAIL}>`,
-      to: process.env.ADMIN_EMAIL,
+      from:    `"MindView IT Services" <${SMTP_USER}>`,
+      to:      ADMIN,
       subject: `New Application – ${name} for ${jobTitle}`,
-      html: adminHtml
+      html:    adminHtml
     });
-
-    res.json({ success: true, message: 'Emails sent successfully' });
+    res.json({ success: true });
   } catch (err) {
-    console.error('Send application error:', err);
-    res.status(500).json({ error: 'Failed to send email', details: err.message });
+    console.error('send-application error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
 /* ══════════════════════════════════════════
    POST /send-contact
-   Called from the contact page form.
-   Body: { name, email, subject, message }
 ══════════════════════════════════════════ */
 app.post('/send-contact', async (req, res) => {
   const { name, email, subject, message } = req.body;
@@ -139,17 +151,16 @@ app.post('/send-contact', async (req, res) => {
 
   try {
     await transporter.sendMail({
-      from: `"${name} via MindView Contact" <${process.env.SMTP_EMAIL}>`,
-      to: process.env.ADMIN_EMAIL,
+      from:    `"${name} via MindView Contact" <${SMTP_USER}>`,
+      to:      ADMIN,
       replyTo: email,
       subject: `Contact: ${subject || 'New Enquiry'} – from ${name}`,
-      html: contactHtml
+      html:    contactHtml
     });
-
-    res.json({ success: true, message: 'Message sent successfully' });
+    res.json({ success: true });
   } catch (err) {
-    console.error('Send contact error:', err);
-    res.status(500).json({ error: 'Failed to send message', details: err.message });
+    console.error('send-contact error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

@@ -1,0 +1,14 @@
+{
+  "name": "mindviewit-backend",
+  "version": "1.0.0",
+  "description": "Email backend for MindView IT Services",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "nodemailer": "^6.9.9"
+  }
+}
